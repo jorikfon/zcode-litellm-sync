@@ -10,8 +10,7 @@ app: this script reads LiteLLM's `GET /model_group/info` and fills in what's mis
 
 Two files are involved, and both matter:
 
-- `config.json` (`~/.zcode/v2/config.json` for the desktop app, `~/.zcode/cli/config.json` for the
-  CLI) — the model definitions: limits, modalities, reasoning levels.
+- `config.json` — the model definitions: limits, modalities, reasoning levels.
 - `provider_config.json`, next to it — what the app actually *shows*. A personal provider lists
   its visible models in `providerConfigRules.providerRules[].config.personalModelIds`, with
   `modelOrder` beside it. A model defined only in `config.json` does not appear in the UI.
@@ -25,19 +24,34 @@ Order you arranged in the UI is never rearranged, and nothing is ever removed fr
 ## Use
 
 ```sh
-# посмотреть план — ничего не меняется
-./zcode_litellm_sync.py
+# preview — changes nothing
+python3 zcode_litellm_sync.py
 
-# применить
-./zcode_litellm_sync.py --write
+# apply
+python3 zcode_litellm_sync.py --write
 ```
 
-Options: `--config PATH` (default `~/.zcode/v2/config.json`; pass `~/.zcode/cli/config.json` for
-the CLI layout), `--provider ID` (needed when the config has more than one), `--default-context` / `--default-output` for models LiteLLM reports no
-limits for (defaults 128000 / 8192).
+Options: `--config PATH`, `--provider ID` (needed when the config holds more than one, and ZCode
+names custom providers by UUID), `--default-context` / `--default-output` for models LiteLLM
+reports no limits for (defaults 128000 / 8192).
 
-The proxy address and key are taken from the provider itself (`options.baseURL`,
-`options.apiKey`); `$LITELLM_API_KEY` overrides the key. Nothing is written back into the key.
+The proxy address and credentials are taken from the provider entry itself; `$LITELLM_API_KEY`
+overrides the latter. Nothing is ever written back into that field, and it is never printed.
+
+## Where the config lives
+
+The script resolves the same way ZCode itself does: `$ZCODE_DATA_BASE_DIR`, else the home
+directory, then `.zcode/v2/config.json`.
+
+| | desktop app | CLI |
+|---|---|---|
+| macOS / Linux | `~/.zcode/v2/config.json` | `~/.zcode/cli/config.json` |
+| Windows | `%USERPROFILE%\.zcode\v2\config.json` | `%USERPROFILE%\.zcode\cli\config.json` |
+
+For the CLI layout pass the path explicitly with `--config`. On Windows run it as
+`python zcode_litellm_sync.py` (or `py -3 …`); the script is stdlib-only, so nothing needs
+installing. It is developed and tested on macOS — the Windows paths above come from ZCode's own
+resolution logic, not from a test run.
 
 ## What it will and won't do
 
@@ -48,8 +62,8 @@ The proxy address and key are taken from the provider itself (`options.baseURL`,
   model you added by hand.
 - **Respects the UI.** Models you hid in ZCode (`provider.<id>.zcode.deletedModels`) are skipped.
 - **Touches only `provider.<id>.models`** and, in `provider_config.json`, only
-  `personalModelIds` / `modelOrder` of that one provider. The rest of `config.json` — `mcp`, other providers,
-  everything — keeps its content and key order; the file itself is re-serialized with
+  `personalModelIds` / `modelOrder` of that one provider. The rest of `config.json` — `mcp`, other
+  providers, everything — keeps its content and key order; the file itself is re-serialized with
   `json.dump(indent=2)`, so whitespace may differ. The previous file is kept as `config.json.bak`.
 - Embeddings, rerank and other non-chat modes are filtered out; a model with `mode: null` is kept
   (LiteLLM leaves it empty for plenty of working chat models).
@@ -59,8 +73,9 @@ written as `reasoning: {enabled: true, variants: [...]}` — exactly the levels 
 A level the provider does not take is a 400, which puts the deployment into cooldown and turns
 into 429s for everyone on that proxy, so nothing is invented when LiteLLM announces nothing.
 
-Run it with ZCode closed (or restart ZCode afterwards): the app rewrites this file from memory
-and would overwrite the sync.
+Run it with ZCode closed, then start ZCode: the app holds both files in memory and rewrites them,
+so a sync applied underneath a running app is lost. On Windows a running ZCode also locks the
+files — the script then stops with a message instead of leaving a half-written config.
 
 Discovered ≠ callable: `/model_group/info` lists the team's models, and a key may still be denied
 a particular one (403 at request time).

@@ -16,9 +16,17 @@ import sys
 import urllib.error
 import urllib.request
 
-DEFAULT_CONFIG = os.path.expanduser("~/.zcode/v2/config.json")
 # Десктопный ZCode держит рядом второй файл: он решает, что показать в интерфейсе.
 RULES_FILE = "provider_config.json"
+
+
+def default_config_path():
+    """Так же, как считает сам ZCode: ZCODE_DATA_BASE_DIR или домашний каталог, дальше .zcode/v2.
+
+    Схема одинакова на macOS, Linux и Windows (там это %USERPROFILE%\\.zcode\\v2).
+    """
+    base = os.environ.get("ZCODE_DATA_BASE_DIR", "").strip() or os.path.expanduser("~")
+    return os.path.join(base, ".zcode", "v2", "config.json")
 DEFAULT_CONTEXT = 128_000
 DEFAULT_OUTPUT = 8_192
 
@@ -148,17 +156,23 @@ def pick_provider(config, provider_id):
 
 def write_config(path, config):
     """Пишем рядом и переименовываем: ZCode читает этот файл на старте и при смене модели."""
-    shutil.copy2(path, path + ".bak")
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(config, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
-    os.replace(tmp, path)
+    try:
+        shutil.copy2(path, path + ".bak")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(config, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except PermissionError as exc:
+        # На Windows запущенный ZCode держит файл открытым и переименование падает.
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise SystemExit("%s занят (%s). Закройте ZCode и повторите." % (path, exc))
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--config", default=DEFAULT_CONFIG, help="путь к config.json ZCode")
+    parser.add_argument("--config", default=default_config_path(), help="путь к config.json ZCode")
     parser.add_argument("--provider", help="id провайдера в конфиге (если он там не один)")
     parser.add_argument("--write", action="store_true", help="применить изменения")
     parser.add_argument("--default-context", type=int, default=DEFAULT_CONTEXT)

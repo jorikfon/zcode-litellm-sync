@@ -7,6 +7,7 @@ import tempfile
 
 from zcode_litellm_sync import (
     build_models,
+    default_config_path,
     find_provider_rule,
     merge_ids,
     merge_models,
@@ -100,6 +101,17 @@ def test_write_keeps_everything_else():
         assert written["provider"]["litellm"]["options"]["apiKey"] == "секрет", "ключ не теряем"
         assert written["provider"]["litellm"]["models"] == {"m": {"limit": {"context": 1}}}
         assert json.load(open(path + ".bak", encoding="utf-8"))["provider"]["litellm"]["models"] == {}
+
+
+def test_default_config_path():
+    # Путь считается так же, как в самом ZCode, поэтому одинаково работает и на Windows.
+    os.environ["ZCODE_DATA_BASE_DIR"] = os.path.join("X:", "zdata")
+    try:
+        assert default_config_path() == os.path.join("X:", "zdata", ".zcode", "v2", "config.json")
+    finally:
+        del os.environ["ZCODE_DATA_BASE_DIR"]
+    expected = os.path.join(os.path.expanduser("~"), ".zcode", "v2", "config.json")
+    assert default_config_path() == expected
 
 
 def test_pick_provider_and_root():
