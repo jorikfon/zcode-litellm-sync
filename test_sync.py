@@ -110,6 +110,16 @@ def test_default_config_path():
         assert default_config_path() == os.path.join("X:", "zdata", ".zcode", "v2", "config.json")
     finally:
         del os.environ["ZCODE_DATA_BASE_DIR"]
+    # HOME важнее USERPROFILE — как в самом ZCode.
+    saved = os.environ.get("HOME")
+    os.environ["HOME"] = os.path.join("X:", "home")
+    try:
+        assert default_config_path() == os.path.join("X:", "home", ".zcode", "v2", "config.json")
+    finally:
+        if saved is None:
+            del os.environ["HOME"]
+        else:
+            os.environ["HOME"] = saved
     expected = os.path.join(os.path.expanduser("~"), ".zcode", "v2", "config.json")
     assert default_config_path() == expected
 

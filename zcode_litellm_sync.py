@@ -25,7 +25,13 @@ def default_config_path():
 
     Схема одинакова на macOS, Linux и Windows (там это %USERPROFILE%\\.zcode\\v2).
     """
-    base = os.environ.get("ZCODE_DATA_BASE_DIR", "").strip() or os.path.expanduser("~")
+    # HOME проверяем отдельно: на Windows os.path.expanduser его игнорирует и берёт USERPROFILE,
+    # а ZCode читает именно HOME — в Git Bash и MSYS это разные каталоги.
+    base = (
+        os.environ.get("ZCODE_DATA_BASE_DIR", "").strip()
+        or os.environ.get("HOME", "").strip()
+        or os.path.expanduser("~")
+    )
     return os.path.join(base, ".zcode", "v2", "config.json")
 DEFAULT_CONTEXT = 128_000
 DEFAULT_OUTPUT = 8_192
