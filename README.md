@@ -37,7 +37,8 @@ The proxy address and key are taken from the provider itself (`options.baseURL`,
   model you added by hand.
 - **Respects the UI.** Models you hid in ZCode (`provider.<id>.zcode.deletedModels`) are skipped.
 - **Touches only `provider.<id>.models`.** The rest of `config.json` — `mcp`, other providers,
-  everything — is rewritten byte-identical, and the previous file is kept as `config.json.bak`.
+  everything — keeps its content and key order; the file itself is re-serialized with
+  `json.dump(indent=2)`, so whitespace may differ. The previous file is kept as `config.json.bak`.
 - Embeddings, rerank and other non-chat modes are filtered out; a model with `mode: null` is kept
   (LiteLLM leaves it empty for plenty of working chat models).
 
