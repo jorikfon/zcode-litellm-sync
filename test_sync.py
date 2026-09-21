@@ -7,6 +7,8 @@ import tempfile
 
 from zcode_litellm_sync import (
     build_models,
+    find_provider_rule,
+    merge_ids,
     merge_models,
     pick_provider,
     proxy_root,
@@ -61,6 +63,27 @@ def test_merge_preserves():
     assert merged["ручная-модель"] == {"name": "не трогать"}
     assert added == ["qwen3.8-max", "zai/glm-5.3"], added
     assert filled == ["deepseek-v4-flash"], filled
+
+
+def test_merge_ids_for_ui_list():
+    # Порядок в интерфейсе выбран человеком — новые id дописываем в конец, ничего не переставляя.
+    shown = ["moonshot/kimi-k3", "zai/glm-5.3"]
+    new, added = merge_ids(shown, ["deepseek-v4-flash", "Zai/GLM-5.3", "moonshot/kimi-k3"])
+    assert new == ["moonshot/kimi-k3", "zai/glm-5.3", "deepseek-v4-flash"], new
+    assert added == ["deepseek-v4-flash"], added
+    # Скрытая в ZCode модель в список интерфейса не возвращается.
+    _, added = merge_ids(shown, ["qwen3.8-max"], deleted=["QWEN3.8-MAX"])
+    assert added == [], added
+
+
+def test_find_provider_rule():
+    rules = {"config": {"providerConfigRules": {"providerRules": [
+        {"providerId": "other", "config": {}},
+        {"providerId": "ours", "config": {"personalModelIds": ["a"]}},
+    ]}}}
+    assert find_provider_rule(rules, "ours")["config"]["personalModelIds"] == ["a"]
+    assert find_provider_rule(rules, "нет такого") is None
+    assert find_provider_rule({}, "ours") is None
 
 
 def test_write_keeps_everything_else():

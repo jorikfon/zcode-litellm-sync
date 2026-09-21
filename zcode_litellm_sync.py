@@ -16,7 +16,9 @@ import sys
 import urllib.error
 import urllib.request
 
-DEFAULT_CONFIG = os.path.expanduser("~/.zcode/cli/config.json")
+DEFAULT_CONFIG = os.path.expanduser("~/.zcode/v2/config.json")
+# Десктопный ZCode держит рядом второй файл: он решает, что показать в интерфейсе.
+RULES_FILE = "provider_config.json"
 DEFAULT_CONTEXT = 128_000
 DEFAULT_OUTPUT = 8_192
 
@@ -110,6 +112,23 @@ def merge_models(existing, discovered):
     return merged, added, filled
 
 
+def merge_ids(existing, discovered, deleted=()):
+    """Дописывает недостающие id в конец: порядок, выбранный в интерфейсе, не трогаем."""
+    skip = {str(x).strip().lower() for x in deleted}
+    have = {str(x).strip().lower() for x in existing}
+    added = [m for m in discovered if m.lower() not in have and m.lower() not in skip]
+    return list(existing) + added, added
+
+
+def find_provider_rule(rules, provider_id):
+    """Правило провайдера в provider_config.json — по нему интерфейс строит список моделей."""
+    items = (((rules.get("config") or {}).get("providerConfigRules") or {}).get("providerRules")) or []
+    for item in items:
+        if isinstance(item, dict) and item.get("providerId") == provider_id:
+            return item
+    return None
+
+
 def pick_provider(config, provider_id):
     providers = config.get("provider") or {}
     if not providers:
@@ -177,6 +196,16 @@ def main(argv=None):
     merged, added, filled = merge_models(existing, discovered)
     stale = sorted(set(existing) - set(discovered))
 
+    rules_path = os.path.join(os.path.dirname(os.path.abspath(args.config)), RULES_FILE)
+    rules = rule = None
+    if os.path.exists(rules_path):
+        try:
+            with open(rules_path, encoding="utf-8") as fh:
+                rules = json.load(fh)
+        except ValueError as exc:
+            raise SystemExit("%s — битый JSON: %s" % (rules_path, exc))
+        rule = find_provider_rule(rules, provider_id)
+
     print("провайдер: %s (%s)" % (provider_id, base_url))
     print("у LiteLLM: %d моделей, в конфиге было: %d" % (len(discovered), len(existing)))
     for model_id in added:
@@ -188,7 +217,18 @@ def main(argv=None):
     if deleted:
         print("  пропущены скрытые в ZCode: %s" % ", ".join(deleted))
 
-    if not added and not filled:
+    shown = list((rule.get("config") or {}).get("personalModelIds") or []) if rule else []
+    order = list((rule.get("config") or {}).get("modelOrder") or []) if rule else []
+    shown_new, shown_added = merge_ids(shown, sorted(discovered), deleted)
+    order_new, _ = merge_ids(order, sorted(discovered), deleted)
+    if rule is None and rules is not None:
+        print("  в %s нет правила для этого провайдера — список в интерфейсе не трогаю" % RULES_FILE)
+    elif rule is not None:
+        print("в интерфейсе показано: %d, добавится: %d" % (len(shown), len(shown_added)))
+        for model_id in shown_added:
+            print("  + %s (в список интерфейса)" % model_id)
+
+    if not added and not filled and not shown_added:
         print("менять нечего")
         return 0
     if not args.write:
@@ -197,6 +237,11 @@ def main(argv=None):
 
     provider["models"] = merged
     write_config(args.config, config)
+    if rule is not None and shown_added:
+        rule.setdefault("config", {})["personalModelIds"] = shown_new
+        rule["config"]["modelOrder"] = order_new
+        write_config(rules_path, rules)
+        print("список интерфейса обновлён в %s (копия — %s.bak)" % (rules_path, rules_path))
     print("\nзаписано в %s (копия прежнего — %s.bak)" % (args.config, args.config))
     print("ZCode перечитывает конфиг при старте — перезапустите его")
     return 0

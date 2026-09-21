@@ -3,10 +3,21 @@
 Writes the models of a LiteLLM proxy into [ZCode](https://z.ai)'s config, so you don't add them
 by hand one at a time.
 
-ZCode keeps its providers in `~/.zcode/cli/config.json` (key `provider`, opencode-shaped) and
-never asks a provider for its model list — its connectivity check only calls `/chat/completions`,
-and its plugin marketplace has no hook for providers or models. So discovery has to happen
-outside the app: this script reads LiteLLM's `GET /model_group/info` and fills in what's missing.
+ZCode keeps its providers in `config.json` (key `provider`, opencode-shaped) and never asks a
+provider for its model list — its connectivity check only calls `/chat/completions`, and its
+plugin marketplace has no hook for providers or models. So discovery has to happen outside the
+app: this script reads LiteLLM's `GET /model_group/info` and fills in what's missing.
+
+Two files are involved, and both matter:
+
+- `config.json` (`~/.zcode/v2/config.json` for the desktop app, `~/.zcode/cli/config.json` for the
+  CLI) — the model definitions: limits, modalities, reasoning levels.
+- `provider_config.json`, next to it — what the app actually *shows*. A personal provider lists
+  its visible models in `providerConfigRules.providerRules[].config.personalModelIds`, with
+  `modelOrder` beside it. A model defined only in `config.json` does not appear in the UI.
+
+The script updates both: definitions in the first, missing ids appended to the end of the second.
+Order you arranged in the UI is never rearranged, and nothing is ever removed from either list.
 
 `/model_group/info` is used on purpose: it lists what your key's team actually has, while
 `/v1/model/info` returns different things to different keys (sometimes nothing at all).
@@ -21,8 +32,8 @@ outside the app: this script reads LiteLLM's `GET /model_group/info` and fills i
 ./zcode_litellm_sync.py --write
 ```
 
-Options: `--config PATH` (default `~/.zcode/cli/config.json`), `--provider ID` (needed when the
-config has more than one), `--default-context` / `--default-output` for models LiteLLM reports no
+Options: `--config PATH` (default `~/.zcode/v2/config.json`; pass `~/.zcode/cli/config.json` for
+the CLI layout), `--provider ID` (needed when the config has more than one), `--default-context` / `--default-output` for models LiteLLM reports no
 limits for (defaults 128000 / 8192).
 
 The proxy address and key are taken from the provider itself (`options.baseURL`,
@@ -36,7 +47,8 @@ The proxy address and key are taken from the provider itself (`options.baseURL`,
 - **Never deletes.** A model that disappeared from LiteLLM is reported and left alone; so is a
   model you added by hand.
 - **Respects the UI.** Models you hid in ZCode (`provider.<id>.zcode.deletedModels`) are skipped.
-- **Touches only `provider.<id>.models`.** The rest of `config.json` — `mcp`, other providers,
+- **Touches only `provider.<id>.models`** and, in `provider_config.json`, only
+  `personalModelIds` / `modelOrder` of that one provider. The rest of `config.json` — `mcp`, other providers,
   everything — keeps its content and key order; the file itself is re-serialized with
   `json.dump(indent=2)`, so whitespace may differ. The previous file is kept as `config.json.bak`.
 - Embeddings, rerank and other non-chat modes are filtered out; a model with `mode: null` is kept
