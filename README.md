@@ -59,7 +59,8 @@ directory, then `.zcode/v2/config.json`.
 
 For the CLI layout pass the path explicitly with `--config`. On Windows run it as
 `python zcode_litellm_sync.py` (or `py -3 …`); the script is stdlib-only, so nothing needs
-installing. It is developed and tested on macOS — the Windows paths above come from ZCode's own
+installing. It is developed and tested on macOS (ZCode desktop 3.14.3: models, reasoning levels and
+the recreated provider rule show up in the UI) — the Windows paths above come from ZCode's own
 resolution logic, not from a test run.
 
 ## What it will and won't do
