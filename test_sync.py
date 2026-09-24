@@ -9,6 +9,7 @@ from zcode_litellm_sync import (
     build_models,
     default_config_path,
     find_provider_rule,
+    key_models,
     merge_ids,
     merge_models,
     pick_provider,
@@ -135,6 +136,26 @@ def test_pick_provider_and_root():
         assert "--provider" in str(exc)
     else:
         raise AssertionError("при нескольких провайдерах нужен явный выбор")
+
+
+def test_key_models_narrow_and_hide_reasoning():
+    allowed = key_models([
+        {"model_name": "deepseek-v4-flash", "litellm_params": {}},
+        {"model_name": "qwen3.8-max", "litellm_params": {"enable_thinking": False}},
+        {"model_name": "zai/glm-5.3", "litellm_params": {"reasoning_effort": "none"}},
+        {"model_name": "zai/glm-5.3", "litellm_params": {}},
+    ])
+    groups = GROUPS + [{"model_group": "not-for-this-key", "mode": "chat"},
+                       {"model_group": "qwen3.8-max-flag", "mode": "chat"}]
+    groups[1] = dict(groups[1], supports_reasoning=True)
+    models = build_models(groups, allowed=allowed)
+    assert sorted(models) == ["deepseek-v4-flash", "qwen3.8-max", "zai/glm-5.3"], sorted(models)
+    assert models["qwen3.8-max"]["reasoning"] is False
+    # выключен не на всех деплойментах — уровни остаются
+    assert models["zai/glm-5.3"]["reasoning"] == {"enabled": True, "variants": ["low", "high", "max"]}
+    assert models["deepseek-v4-flash"]["reasoning"]["enabled"] is True
+    # /model/info недоступен → не сужаем
+    assert "not-for-this-key" in build_models(groups, allowed=None)
 
 
 if __name__ == "__main__":

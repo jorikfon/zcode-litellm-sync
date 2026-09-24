@@ -18,8 +18,10 @@ Two files are involved, and both matter:
 The script updates both: definitions in the first, missing ids appended to the end of the second.
 Order you arranged in the UI is never rearranged, and nothing is ever removed from either list.
 
-`/model_group/info` is used on purpose: it lists what your key's team actually has, while
-`/v1/model/info` returns different things to different keys (sometimes nothing at all).
+Limits and reasoning levels come from `/model_group/info`; the list is narrowed to the models
+`GET /model/info` shows for your key, so a model the key may not call is not added only to answer
+403. If `/model/info` fails or comes back empty, every model group is used, as before, and a
+`model/info: …` line on stderr says why.
 
 ## Use
 
@@ -71,14 +73,19 @@ resolution logic, not from a test run.
 Reasoning levels: when LiteLLM announces `supported_reasoning_efforts` for a model, they are
 written as `reasoning: {enabled: true, variants: [...]}` — exactly the levels the model takes.
 A level the provider does not take is a 400, which puts the deployment into cooldown and turns
-into 429s for everyone on that proxy, so nothing is invented when LiteLLM announces nothing.
+into 429s for everyone on that proxy, so nothing is invented when LiteLLM announces nothing. A model with reasoning switched off on the deployment itself (`reasoning_effort: "none"`, `enable_thinking: false` or `thinking.type: "disabled"` in `litellm_params` of every deployment, as `/model/info` shows them) is written
+with `reasoning: false` — that is how `*-no-reasoning` groups look, even though LiteLLM reports
+`supports_reasoning: true` for them. Only those fields are read from `litellm_params`; the rest of
+it (provider credentials) is neither kept nor printed.
+
+The script never rewrites a field that is already there, so an entry synced by an older version
+keeps its old `reasoning` value and a model the key may not call stays in the config (reported as
+`?`). Remove such entries by hand, or from ZCode, and run the sync again.
 
 Run it with ZCode closed, then start ZCode: the app holds both files in memory and rewrites them,
 so a sync applied underneath a running app is lost. On Windows a running ZCode also locks the
 files — the script then stops with a message instead of leaving a half-written config.
 
-Discovered ≠ callable: `/model_group/info` lists the team's models, and a key may still be denied
-a particular one (403 at request time).
 
 ## Development
 

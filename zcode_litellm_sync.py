@@ -62,6 +62,50 @@ def fetch_groups(base_url, api_key, timeout=30):
         return json.loads(resp.read().decode("utf-8")).get("data") or []
 
 
+def reasoning_pinned_off(deployment):
+    """Reasoning выключен на самом деплойменте — уровни от клиента он всё равно не примет.
+
+    Из litellm_params читаем только эти поля: остальное там — ссылки на ключи провайдеров.
+    """
+    params = deployment.get("litellm_params") or {}
+    thinking = params.get("thinking")
+    return (
+        params.get("reasoning_effort") == "none"
+        or params.get("enable_thinking") is False
+        or (isinstance(thinking, dict) and thinking.get("type") == "disabled")
+    )
+
+
+def key_models(deployments):
+    """Модели, доступные ключу: имя → reasoning выключен на всех его деплойментах."""
+    out = {}
+    for d in deployments:
+        name = d.get("model_name")
+        if name:
+            out[name] = out.get(name, True) and reasoning_pinned_off(d)
+    return out
+
+
+def fetch_key_models(base_url, api_key, timeout=30):
+    """`/model_group/info` отдаёт и чужие для ключа группы (запрос к ним — 403), `/model/info` —
+    только доступные ключу, но без уровней reasoning. Если `/model/info` не ответил или пуст —
+    None: список не сужаем, как раньше.
+    """
+    req = urllib.request.Request(proxy_root(base_url) + "/model/info")
+    if api_key:
+        req.add_header("Authorization", "Bearer " + api_key)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            models = key_models(json.loads(resp.read().decode("utf-8")).get("data") or [])
+    except (urllib.error.URLError, ValueError, TimeoutError) as exc:
+        print("model/info: %s — показываю все группы, часть может ответить 403" % exc, file=sys.stderr)
+        return None
+    if not models:
+        print("model/info: пустой список — показываю все группы", file=sys.stderr)
+        return None
+    return models
+
+
 def is_chat_group(group):
     # mode у части рабочих моделей null — это не повод их прятать.
     return str(group.get("mode") or "").lower() not in SKIP_MODES
@@ -71,11 +115,12 @@ def _limit(value, fallback):
     return int(value) if isinstance(value, (int, float)) and value > 0 else fallback
 
 
-def to_model(group, default_context=DEFAULT_CONTEXT, default_output=DEFAULT_OUTPUT):
+def to_model(group, default_context=DEFAULT_CONTEXT, default_output=DEFAULT_OUTPUT, no_reasoning=False):
     """Модель в формате `provider.<id>.models.<id>` конфига ZCode."""
     vision = group.get("supports_vision") is True
-    efforts = group.get("supported_reasoning_efforts") or []
-    reasoning = group.get("supports_reasoning") is True
+    # У `*-no-reasoning` LiteLLM объявляет supports_reasoning, но деплоймент его выключает.
+    reasoning = group.get("supports_reasoning") is True and not no_reasoning
+    efforts = (group.get("supported_reasoning_efforts") or []) if reasoning else []
     model = {
         "limit": {
             "context": _limit(group.get("max_input_tokens"), default_context),
@@ -95,12 +140,16 @@ def to_model(group, default_context=DEFAULT_CONTEXT, default_output=DEFAULT_OUTP
     return model
 
 
-def build_models(groups, deleted=(), **kwargs):
+def build_models(groups, deleted=(), allowed=None, **kwargs):
+    """allowed — результат key_models(); None значит «список ключа неизвестен, не сужаем»."""
     skip = {str(x).strip().lower() for x in deleted}
     return {
-        g["model_group"]: to_model(g, **kwargs)
+        g["model_group"]: to_model(g, no_reasoning=bool(allowed and allowed.get(g["model_group"])), **kwargs)
         for g in groups
-        if is_chat_group(g) and g.get("model_group") and g["model_group"].lower() not in skip
+        if is_chat_group(g)
+        and g.get("model_group")
+        and g["model_group"].lower() not in skip
+        and (allowed is None or g["model_group"] in allowed)
     }
 
 
@@ -205,10 +254,12 @@ def main(argv=None):
     except (urllib.error.URLError, ValueError, TimeoutError) as exc:
         raise SystemExit("LiteLLM не ответил (%s): %s" % (proxy_root(base_url), exc))
 
+    allowed = fetch_key_models(base_url, api_key)
     deleted = ((provider.get("zcode") or {}).get("deletedModels")) or []
     discovered = build_models(
         groups,
         deleted=deleted,
+        allowed=allowed,
         default_context=args.default_context,
         default_output=args.default_output,
     )
@@ -233,7 +284,7 @@ def main(argv=None):
     for model_id in filled:
         print("  ~ %s (дозаполнены поля)" % model_id)
     for model_id in stale:
-        print("  ? %s — у LiteLLM больше нет, оставляю" % model_id)
+        print("  ? %s — у LiteLLM нет или ключу недоступна, оставляю" % model_id)
     if deleted:
         print("  пропущены скрытые в ZCode: %s" % ", ".join(deleted))
 
