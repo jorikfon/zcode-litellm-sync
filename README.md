@@ -16,6 +16,13 @@ Two files are involved, and both matter:
   `modelOrder` beside it. A model defined only in `config.json` does not appear in the UI.
 
 The script updates both: definitions in the first, missing ids appended to the end of the second.
+
+Deleting a personal provider in ZCode removes only its rule from `provider_config.json` and leaves
+the entry in `config.json`; models synced into such an entry stay invisible. So when the provider
+has no rule, the script writes one the way ZCode does (`group: standard-personal`, the API key and
+`baseURL` from the provider's own `config.json` entry, `openai-chat-completions`) and appends the
+provider to `providerOrder`. Built-in providers (`builtin:*`) are left alone. If the entry has no
+`apiKey`, the rule gets an empty one — enter the key in ZCode's provider settings.
 Order you arranged in the UI is never rearranged, and nothing is ever removed from either list.
 
 Limits and reasoning levels come from `/model_group/info`; the list is narrowed to the models
@@ -64,7 +71,8 @@ resolution logic, not from a test run.
   model you added by hand.
 - **Respects the UI.** Models you hid in ZCode (`provider.<id>.zcode.deletedModels`) are skipped.
 - **Touches only `provider.<id>.models`** and, in `provider_config.json`, only
-  `personalModelIds` / `modelOrder` of that one provider. The rest of `config.json` — `mcp`, other
+  `personalModelIds` / `modelOrder` of that one provider (or its whole rule, when it is missing,
+  plus its place in `providerOrder`). The rest of `config.json` — `mcp`, other
   providers, everything — keeps its content and key order; the file itself is re-serialized with
   `json.dump(indent=2)`, so whitespace may differ. The previous file is kept as `config.json.bak`.
 - Embeddings, rerank and other non-chat modes are filtered out; a model with `mode: null` is kept

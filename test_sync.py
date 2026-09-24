@@ -8,10 +8,12 @@ import tempfile
 from zcode_litellm_sync import (
     build_models,
     default_config_path,
+    add_provider_rule,
     find_provider_rule,
     key_models,
     merge_ids,
     merge_models,
+    new_provider_rule,
     pick_provider,
     proxy_root,
     to_model,
@@ -156,6 +158,22 @@ def test_key_models_narrow_and_hide_reasoning():
     assert models["deepseek-v4-flash"]["reasoning"]["enabled"] is True
     # /model/info недоступен → не сужаем
     assert "not-for-this-key" in build_models(groups, allowed=None)
+
+
+def test_provider_rule_recreated():
+    # provider_config.json после удаления провайдера в интерфейсе: правил нет вовсе
+    rules = {"schemaVersion": 1, "config": {"providerOrder": [], "providerConfigRules": {"providerRules": []}}}
+    provider = {"name": "LiteLLM", "options": {"baseURL": "https://litellm.example.com", "apiKey": "sk-test"}}
+    rule = new_provider_rule("068e", provider)
+    add_provider_rule(rules, rule)
+    assert find_provider_rule(rules, "068e") is rule
+    assert rules["config"]["providerOrder"] == ["068e"]
+    assert rule["providerName"] == "LiteLLM"
+    assert rule["config"]["group"] == "standard-personal"
+    assert rule["config"]["access"] == {"type": "api-key", "apiKey": "sk-test"}
+    assert rule["config"]["api"] == {"type": "openai-chat-completions", "baseUrl": "https://litellm.example.com"}
+    add_provider_rule(rules, new_provider_rule("068e", provider))
+    assert rules["config"]["providerOrder"] == ["068e"]  # порядок не дублируется
 
 
 if __name__ == "__main__":

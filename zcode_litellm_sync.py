@@ -192,6 +192,36 @@ def find_provider_rule(rules, provider_id):
     return None
 
 
+def new_provider_rule(provider_id, provider):
+    """Правило личного провайдера — в том виде, в каком его пишет сам ZCode (3.12).
+
+    Удаляя провайдера в интерфейсе, ZCode стирает только это правило, а запись в config.json
+    оставляет; без правила провайдер не виден, сколько моделей ему ни дописывай.
+    Ключ и адрес берутся из той же записи config.json, где ZCode их уже хранит.
+    """
+    options = provider.get("options") or {}
+    return {
+        "providerId": provider_id,
+        "providerName": provider.get("name") or provider_id,
+        "config": {
+            "group": "standard-personal",
+            "access": {"type": "api-key", "apiKey": options.get("apiKey") or ""},
+            "api": {"type": "openai-chat-completions", "baseUrl": options.get("baseURL")},
+            "personalModelIds": [],
+            "modelOrder": [],
+        },
+    }
+
+
+def add_provider_rule(rules, rule):
+    """Дописывает правило и ставит провайдера в конец providerOrder."""
+    cfg = rules.setdefault("config", {})
+    cfg.setdefault("providerConfigRules", {}).setdefault("providerRules", []).append(rule)
+    order = cfg.setdefault("providerOrder", [])
+    if rule["providerId"] not in order:
+        order.append(rule["providerId"])
+
+
 def pick_provider(config, provider_id):
     providers = config.get("provider") or {}
     if not providers:
@@ -276,6 +306,11 @@ def main(argv=None):
         except ValueError as exc:
             raise SystemExit("%s — битый JSON: %s" % (rules_path, exc))
         rule = find_provider_rule(rules, provider_id)
+    # Встроенные провайдеры (`builtin:*`) интерфейс показывает без правил — им не создаём.
+    created_rule = rule is None and rules is not None and not provider_id.startswith("builtin:")
+    if created_rule:
+        rule = new_provider_rule(provider_id, provider)
+        add_provider_rule(rules, rule)
 
     print("провайдер: %s (%s)" % (provider_id, base_url))
     print("у LiteLLM: %d моделей, в конфиге было: %d" % (len(discovered), len(existing)))
@@ -292,6 +327,8 @@ def main(argv=None):
     order = list((rule.get("config") or {}).get("modelOrder") or []) if rule else []
     shown_new, shown_added = merge_ids(shown, sorted(discovered), deleted)
     order_new, _ = merge_ids(order, sorted(discovered), deleted)
+    if created_rule:
+        print("  + правило провайдера в %s: его не было, без него провайдер в интерфейсе не виден" % RULES_FILE)
     if rule is None and rules is not None:
         print("  в %s нет правила для этого провайдера — список в интерфейсе не трогаю" % RULES_FILE)
     elif rule is not None:
@@ -299,7 +336,7 @@ def main(argv=None):
         for model_id in shown_added:
             print("  + %s (в список интерфейса)" % model_id)
 
-    if not added and not filled and not shown_added:
+    if not added and not filled and not shown_added and not created_rule:
         print("менять нечего")
         return 0
     if not args.write:
@@ -308,7 +345,7 @@ def main(argv=None):
 
     provider["models"] = merged
     write_config(args.config, config)
-    if rule is not None and shown_added:
+    if rule is not None and (shown_added or created_rule):
         rule.setdefault("config", {})["personalModelIds"] = shown_new
         rule["config"]["modelOrder"] = order_new
         write_config(rules_path, rules)
