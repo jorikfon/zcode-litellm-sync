@@ -87,6 +87,19 @@ with `reasoning: false` — that is how `*-no-reasoning` groups look, even thoug
 `supports_reasoning: true` for them. Only those fields are read from `litellm_params`; the rest of
 it (provider credentials) is neither kept nor printed.
 
+**ZCode does not take reasoning levels from `config.json`.** It matches the model id against the
+regexes of its built-in catalog (`ZCode.app/Contents/Resources/config/provider/zcode-builtin.json`)
+and shows that catalog's levels: `deepseek-v4-flash-no-reasoning` matches `.*deepseek-v4-flash…`
+and gets `disabled/low/high/max`. The only override is a manual model rule in
+`provider_config.json` (`modelConfigRules.manualProviderModelRules`). So for every model written
+with `reasoning: false` the script adds one: `reasoningLevel.values: ["disabled"]` and `map: "{}"`
+(nothing extra in the request). ZCode's schema requires every property flag in such a rule and
+rejects the *whole* file otherwise (all personal providers vanish from the UI), so context, output
+limit and image support come from LiteLLM, and the remaining flags (JSON-schema output, video, …)
+from the same catalog entry, or `false` when the catalog is not found — pass its path with
+`--zcode-builtin` outside macOS. An existing manual rule is never touched, and a model with a
+ZCode "smart" rule is skipped (ZCode forbids both). Verified on ZCode 3.14.3.
+
 The script never rewrites a field that is already there, so an entry synced by an older version
 keeps its old `reasoning` value and a model the key may not call stays in the config (reported as
 `?`). Remove such entries by hand, or from ZCode, and run the sync again.
