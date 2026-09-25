@@ -8,6 +8,7 @@ import tempfile
 from zcode_litellm_sync import (
     build_models,
     default_config_path,
+    add_manual_rules,
     add_provider_rule,
     find_provider_rule,
     key_models,
@@ -174,6 +175,29 @@ def test_provider_rule_recreated():
     assert rule["config"]["api"] == {"type": "openai-chat-completions", "baseUrl": "https://litellm.example.com"}
     add_provider_rule(rules, new_provider_rule("068e", provider))
     assert rules["config"]["providerOrder"] == ["068e"]  # порядок не дублируется
+
+
+def test_manual_rules_for_models_without_reasoning():
+    models = build_models(GROUPS)
+    models["deepseek-v4-flash-no-reasoning"] = {
+        "limit": {"context": 1000000, "output": 393216},
+        "modalities": {"input": ["text"], "output": ["text"]},
+        "reasoning": False,
+    }
+    rules = {"config": {"modelConfigRules": {
+        "providerModelRules": [{"providerId": "p", "modelId": "qwen3.8-max"}],
+        "manualProviderModelRules": [{"providerId": "p", "modelId": "mine", "config": {"x": 1}}],
+    }}}
+    models["mine"] = {"reasoning": False}
+    added = add_manual_rules(rules, "p", models)
+    # qwen3.8-max без reasoning, но у него «умное» правило; mine — уже ручное; модели с уровнями не трогаем
+    assert added == ["deepseek-v4-flash-no-reasoning"], added
+    rule = rules["config"]["modelConfigRules"]["manualProviderModelRules"][-1]
+    assert rule["config"]["optionSpecs"]["reasoningLevel"] == {"values": ["disabled"], "map": "{}"}
+    assert rule["config"]["optionSpecs"]["maxOutputTokens"] == {"max": 393216}
+    assert rule["config"]["properties"] == {"contextWindow": 1000000, "inputFormat": {"supportsImage": False}}
+    assert rules["config"]["modelConfigRules"]["manualProviderModelRules"][0]["config"] == {"x": 1}
+    assert add_manual_rules(rules, "p", models) == []  # повторный запуск ничего не добавляет
 
 
 if __name__ == "__main__":

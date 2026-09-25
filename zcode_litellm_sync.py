@@ -222,6 +222,56 @@ def add_provider_rule(rules, rule):
         order.append(rule["providerId"])
 
 
+def manual_no_reasoning_rule(provider_id, model_id, model):
+    """Ручное правило ZCode, оставляющее в селекторе reasoning только «выключено».
+
+    ZCode берёт уровни reasoning не из config.json, а из встроенного каталога по регулярке
+    на имя модели: `deepseek-v4-flash-no-reasoning` для него — deepseek-v4-flash с уровнями.
+    Перекрыть это можно только ручным правилом. `properties` и `maxOutputTokens` схема
+    требует обязательно; незаданные в них поля ZCode берёт из своего каталога.
+    `map: "{}"` — в запрос ничего не добавляем: reasoning выключен на стороне прокси.
+    """
+    limit = model.get("limit") or {}
+    image = "image" in ((model.get("modalities") or {}).get("input") or [])
+    return {
+        "providerId": provider_id,
+        "modelId": model_id,
+        "config": {
+            "properties": {
+                "contextWindow": _limit(limit.get("context"), DEFAULT_CONTEXT),
+                "inputFormat": {"supportsImage": image},
+            },
+            "optionSpecs": {
+                "reasoningLevel": {"values": ["disabled"], "map": "{}"},
+                "maxOutputTokens": {"max": _limit(limit.get("output"), DEFAULT_OUTPUT)},
+            },
+        },
+    }
+
+
+def add_manual_rules(rules, provider_id, models):
+    """Ручные правила для моделей без reasoning. Существующие правила не трогаем:
+    ни ручные (их мог поправить пользователь), ни «умные» — ZCode запрещает оба сразу.
+
+    Возвращает id моделей, которым правило добавлено.
+    """
+    mcr = rules.setdefault("config", {}).setdefault("modelConfigRules", {})
+    manual = mcr.setdefault("manualProviderModelRules", [])
+    taken = {
+        (r.get("providerId"), r.get("modelId"))
+        for r in manual + (mcr.get("providerModelRules") or [])
+        if isinstance(r, dict)
+    }
+    added = []
+    for model_id in sorted(models):
+        model = models[model_id]
+        if not isinstance(model, dict) or model.get("reasoning") or (provider_id, model_id) in taken:
+            continue
+        manual.append(manual_no_reasoning_rule(provider_id, model_id, model))
+        added.append(model_id)
+    return added
+
+
 def pick_provider(config, provider_id):
     providers = config.get("provider") or {}
     if not providers:
@@ -336,7 +386,13 @@ def main(argv=None):
         for model_id in shown_added:
             print("  + %s (в список интерфейса)" % model_id)
 
-    if not added and not filled and not shown_added and not created_rule:
+    manual_added = []
+    if rule is not None:
+        manual_added = add_manual_rules(rules, provider_id, merged)
+        for model_id in manual_added:
+            print("  + %s: в селекторе reasoning только «выключено» (ручное правило ZCode)" % model_id)
+
+    if not added and not filled and not shown_added and not created_rule and not manual_added:
         print("менять нечего")
         return 0
     if not args.write:
@@ -345,7 +401,7 @@ def main(argv=None):
 
     provider["models"] = merged
     write_config(args.config, config)
-    if rule is not None and (shown_added or created_rule):
+    if rule is not None and (shown_added or created_rule or manual_added):
         rule.setdefault("config", {})["personalModelIds"] = shown_new
         rule["config"]["modelOrder"] = order_new
         write_config(rules_path, rules)
