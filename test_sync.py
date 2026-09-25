@@ -206,6 +206,38 @@ def test_manual_rules_for_models_without_reasoning():
     assert add_manual_rules(rules, "p", models) == []  # повторный запуск ничего не добавляет
 
 
+def test_manual_rules_for_levels_zcode_cannot_guess():
+    # срез zcode-builtin.json 3.14.3: общее правило `.*` даёт on/off, у glm-5.3 и kimi-k3 — свои уровни
+    catalog = [
+        {"modelMatch": ".*", "config": {"optionSpecs": {"reasoningLevel": {"values": ["disabled", "enabled"], "map": "{}"}}}},
+        {"modelMatch": ".*glm-5\\.3(?:-flash)?(?:[.\\-:/\\[].*)?",
+         "config": {"optionSpecs": {"reasoningLevel": {"values": ["low", "high", "max"]}}}},
+        {"modelMatch": ".*kimi-k3(?:[.\\-:/\\[].*)?",
+         "config": {"optionSpecs": {"reasoningLevel": {"values": ["disabled", "low", "high", "max"]}}}},
+    ]
+    lv = lambda v: {"limit": {"context": 1048576, "output": 128000},
+                    "modalities": {"input": ["text", "image"], "output": ["text"]},
+                    "reasoning": {"enabled": True, "variants": v}}
+    models = {
+        "coding-fast": lv(["low", "high", "max"]),
+        "zai-coding/glm-5.3": lv(["low", "high", "max"]),
+        "moonshot/kimi-k3": lv(["none", "low", "high", "max"]),  # none у LiteLLM = disabled у ZCode
+        "kimi-custom": lv(["none", "low"]),
+    }
+    rules = {}
+    added = add_manual_rules(rules, "p", models, catalog, "MAP")
+    assert added == ["coding-fast", "kimi-custom"], added
+    by_id = {r["modelId"]: r for r in rules["config"]["modelConfigRules"]["manualProviderModelRules"]}
+    # map обязателен в схеме ZCode (без него он отвергает весь файл) — берём из правила API каталога
+    assert by_id["coding-fast"]["config"]["optionSpecs"]["reasoningLevel"] == {"values": ["low", "high", "max"], "map": "MAP"}
+    assert by_id["kimi-custom"]["config"]["optionSpecs"]["reasoningLevel"] == {"values": ["disabled", "low"], "map": "MAP"}
+    # каталог без map для этого API — уровни не трогаем
+    assert add_manual_rules({}, "p", {"coding-fast": lv(["low"])}, catalog) == []
+    assert by_id["coding-fast"]["config"]["properties"]["inputFormat"]["supportsImage"] is True
+    # без каталога уровни не трогаем
+    assert add_manual_rules({}, "p", {"coding-fast": lv(["low"])}) == []
+
+
 def test_builtin_properties_follow_zcode_catalog():
     # срез zcode-builtin.json 3.14.3: регулярка ловит и `-no-reasoning`
     catalog = [

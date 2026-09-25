@@ -100,6 +100,14 @@ from the same catalog entry, or `false` when the catalog is not found — pass i
 `--zcode-builtin` outside macOS. An existing manual rule is never touched, and a model with a
 ZCode "smart" rule is skipped (ZCode forbids both). Verified on ZCode 3.14.3.
 
+The same goes the other way: a name the catalog doesn't know (`coding-fast`, `gpt-6-luna`) falls
+into its catch-all `.*` rule and gets only on/off. When the levels the catalog would give differ
+from the ones LiteLLM announces, the script adds a manual rule with LiteLLM's levels
+(`none` renamed to ZCode's `disabled`). The schema requires `map` there too (without it the whole
+file is rejected), so it is copied from the catalog's catch-all rule for the provider's API type —
+the request is built exactly as for built-in models. Without the catalog it can't tell, and leaves
+such models alone.
+
 The script never rewrites a field that is already there, so an entry synced by an older version
 keeps its old `reasoning` value and a model the key may not call stays in the config (reported as
 `?`). Remove such entries by hand, or from ZCode, and run the sync again.

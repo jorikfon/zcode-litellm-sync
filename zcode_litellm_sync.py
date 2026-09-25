@@ -51,6 +51,37 @@ def builtin_properties(builtin_rules, model_id):
     return props, fmt
 
 
+def load_api_map(path, api_type):
+    """`reasoningLevel.map` общего правила каталога для типа API провайдера: схема ZCode требует
+    map в ручном правиле, а этот — тот же, что ZCode сам применил бы к модели. Нет — None."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rules = ((json.load(fh).get("config") or {}).get("modelConfigRules") or {}).get("modelApiRules") or []
+    except (OSError, ValueError):
+        return None
+    for rule in rules:
+        if rule.get("modelMatch") == ".*" and rule.get("apiTypeMatch") == api_type:
+            m = (((rule.get("config") or {}).get("optionSpecs") or {}).get("reasoningLevel") or {}).get("map")
+            if isinstance(m, str):
+                return m
+    return None
+
+
+def builtin_levels(builtin_rules, model_id):
+    """Уровни reasoning, которые ZCode сам даст модели по имени: последнее совпавшее правило с values."""
+    levels = None
+    for rule in builtin_rules:
+        try:
+            if not re.fullmatch(rule.get("modelMatch") or "", model_id):
+                continue
+        except re.error:
+            continue
+        values = (((rule.get("config") or {}).get("optionSpecs") or {}).get("reasoningLevel") or {}).get("values")
+        if isinstance(values, list):
+            levels = values
+    return levels
+
+
 def default_config_path():
     """Так же, как считает сам ZCode: ZCODE_DATA_BASE_DIR или домашний каталог, дальше .zcode/v2.
 
@@ -253,18 +284,28 @@ def add_provider_rule(rules, rule):
         order.append(rule["providerId"])
 
 
-def manual_no_reasoning_rule(provider_id, model_id, model, builtin_rules=()):
-    """Ручное правило ZCode, оставляющее в селекторе reasoning только «выключено».
+def zcode_levels(variants):
+    """Уровни LiteLLM в словаре ZCode: «выключено» у него `disabled`, у LiteLLM — `none`.
+    Правило API ZCode для `disabled` само шлёт провайдеру `reasoning_effort: "none"`."""
+    return ["disabled" if v == "none" else v for v in variants]
 
-    ZCode берёт уровни reasoning не из config.json, а из встроенного каталога по регулярке
-    на имя модели: `deepseek-v4-flash-no-reasoning` для него — deepseek-v4-flash с уровнями.
-    Перекрыть это можно только ручным правилом, а в нём схема ZCode требует все флаги
-    `properties` — их берём из того же каталога, чтобы не выключить модели JSON-вывод или видео.
-    `map: "{}"` — в запрос ничего не добавляем: reasoning выключен на стороне прокси.
+
+def manual_rule(provider_id, model_id, model, builtin_rules=(), api_map=None):
+    """Ручное правило ZCode с уровнями reasoning модели.
+
+    ZCode берёт уровни не из config.json, а из встроенного каталога по регулярке на имя:
+    `deepseek-v4-flash-no-reasoning` для него — deepseek-v4-flash с уровнями, а `coding-fast`
+    (имя без семейства) попадает только в общее правило `.*` с on/off. Перекрыть это можно
+    только ручным правилом, а в нём схема ZCode требует все флаги `properties` — их берём из
+    того же каталога, чтобы не выключить модели JSON-вывод или видео.
+    Без reasoning: `values: ["disabled"]`, `map: "{}"` — в запрос ничего не добавляем.
+    С уровнями: `map` общего правила API из каталога (ZCode требует map в ручном правиле).
     """
     limit = model.get("limit") or {}
     image = "image" in ((model.get("modalities") or {}).get("input") or [])
     props, fmt = builtin_properties(builtin_rules, model_id)
+    variants = (model.get("reasoning") or {}).get("variants") if isinstance(model.get("reasoning"), dict) else None
+    level = {"values": zcode_levels(variants), "map": api_map} if variants else {"values": ["disabled"], "map": "{}"}
     return {
         "providerId": provider_id,
         "modelId": model_id,
@@ -275,15 +316,26 @@ def manual_no_reasoning_rule(provider_id, model_id, model, builtin_rules=()):
                 **{k: props.get(k, False) for k in FLAGS},
             },
             "optionSpecs": {
-                "reasoningLevel": {"values": ["disabled"], "map": "{}"},
+                "reasoningLevel": level,
                 "maxOutputTokens": {"max": _limit(limit.get("output"), DEFAULT_OUTPUT)},
             },
         },
     }
 
 
-def add_manual_rules(rules, provider_id, models, builtin_rules=()):
-    """Ручные правила для моделей без reasoning. Существующие правила не трогаем:
+def needs_manual_rule(model_id, model, builtin_rules, api_map=None):
+    """Нужно ли ручное правило: reasoning выключен или каталог ZCode даст не те уровни."""
+    reasoning = model.get("reasoning")
+    if not reasoning:
+        return True
+    variants = reasoning.get("variants") if isinstance(reasoning, dict) else None
+    # Без каталога не знаем, что ZCode покажет сам, и нечем заполнить map — уровни не трогаем.
+    return bool(variants and builtin_rules and api_map) and builtin_levels(builtin_rules, model_id) != zcode_levels(variants)
+
+
+def add_manual_rules(rules, provider_id, models, builtin_rules=(), api_map=None):
+    """Ручные правила для моделей без reasoning и для тех, чьи уровни каталог ZCode
+    по имени не угадывает. Существующие правила не трогаем:
     ни ручные (их мог поправить пользователь), ни «умные» — ZCode запрещает оба сразу.
 
     Возвращает id моделей, которым правило добавлено.
@@ -298,9 +350,10 @@ def add_manual_rules(rules, provider_id, models, builtin_rules=()):
     added = []
     for model_id in sorted(models):
         model = models[model_id]
-        if not isinstance(model, dict) or model.get("reasoning") or (provider_id, model_id) in taken:
+        if (not isinstance(model, dict) or (provider_id, model_id) in taken
+                or not needs_manual_rule(model_id, model, builtin_rules, api_map)):
             continue
-        manual.append(manual_no_reasoning_rule(provider_id, model_id, model, builtin_rules))
+        manual.append(manual_rule(provider_id, model_id, model, builtin_rules, api_map))
         added.append(model_id)
     return added
 
@@ -423,9 +476,14 @@ def main(argv=None):
 
     manual_added = []
     if rule is not None:
-        manual_added = add_manual_rules(rules, provider_id, merged, load_builtin_rules(args.zcode_builtin))
+        api_type = ((rule.get("config") or {}).get("api") or {}).get("type") or "openai-chat-completions"
+        manual_added = add_manual_rules(rules, provider_id, merged, load_builtin_rules(args.zcode_builtin),
+                                        load_api_map(args.zcode_builtin, api_type))
+        by_id = {r.get("modelId"): r for r in rules["config"]["modelConfigRules"]["manualProviderModelRules"]
+                 if r.get("providerId") == provider_id}
         for model_id in manual_added:
-            print("  + %s: в селекторе reasoning только «выключено» (ручное правило ZCode)" % model_id)
+            levels = by_id[model_id]["config"]["optionSpecs"]["reasoningLevel"]["values"]
+            print("  + %s: reasoning в селекторе — %s (ручное правило ZCode)" % (model_id, ", ".join(levels)))
 
     if not added and not filled and not shown_added and not created_rule and not manual_added:
         print("менять нечего")
