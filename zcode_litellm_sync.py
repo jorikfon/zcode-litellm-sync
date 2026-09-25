@@ -11,6 +11,7 @@ ZCode держит провайдеров в ~/.zcode/cli/config.json (ключ 
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import urllib.error
@@ -18,6 +19,36 @@ import urllib.request
 
 # Десктопный ZCode держит рядом второй файл: он решает, что показать в интерфейсе.
 RULES_FILE = "provider_config.json"
+# Встроенный каталог моделей ZCode (macOS). На других ОС путь передаётся через --zcode-builtin.
+BUILTIN_CATALOG = "/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json"
+# Флаги, которые ручное правило ZCode обязано задать; берём их из каталога, чтобы ничего не выключить.
+FLAGS = ("supportsJsonSchemaOutput", "supportsNativeWebSearch", "supportsMidConversationSystem")
+INPUT_FLAGS = ("supportsVideo", "supportsPdf")
+
+
+def load_builtin_rules(path):
+    """modelRules встроенного каталога ZCode; нет файла — пустой список (флаги станут false)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return ((json.load(fh).get("config") or {}).get("modelConfigRules") or {}).get("modelRules") or []
+    except (OSError, ValueError):
+        return []
+
+
+def builtin_properties(builtin_rules, model_id):
+    """Свойства модели по каталогу ZCode: все совпавшие по modelMatch правила, поздние поверх ранних."""
+    props, fmt = {}, {}
+    for rule in builtin_rules:
+        try:
+            if not re.fullmatch(rule.get("modelMatch") or "", model_id):
+                continue
+        except re.error:
+            continue
+        p = (rule.get("config") or {}).get("properties") or {}
+        props.update({k: p[k] for k in FLAGS if isinstance(p.get(k), bool)})
+        f = p.get("inputFormat") or {}
+        fmt.update({k: f[k] for k in INPUT_FLAGS if isinstance(f.get(k), bool)})
+    return props, fmt
 
 
 def default_config_path():
@@ -222,24 +253,26 @@ def add_provider_rule(rules, rule):
         order.append(rule["providerId"])
 
 
-def manual_no_reasoning_rule(provider_id, model_id, model):
+def manual_no_reasoning_rule(provider_id, model_id, model, builtin_rules=()):
     """Ручное правило ZCode, оставляющее в селекторе reasoning только «выключено».
 
     ZCode берёт уровни reasoning не из config.json, а из встроенного каталога по регулярке
     на имя модели: `deepseek-v4-flash-no-reasoning` для него — deepseek-v4-flash с уровнями.
-    Перекрыть это можно только ручным правилом. `properties` и `maxOutputTokens` схема
-    требует обязательно; незаданные в них поля ZCode берёт из своего каталога.
+    Перекрыть это можно только ручным правилом, а в нём схема ZCode требует все флаги
+    `properties` — их берём из того же каталога, чтобы не выключить модели JSON-вывод или видео.
     `map: "{}"` — в запрос ничего не добавляем: reasoning выключен на стороне прокси.
     """
     limit = model.get("limit") or {}
     image = "image" in ((model.get("modalities") or {}).get("input") or [])
+    props, fmt = builtin_properties(builtin_rules, model_id)
     return {
         "providerId": provider_id,
         "modelId": model_id,
         "config": {
             "properties": {
                 "contextWindow": _limit(limit.get("context"), DEFAULT_CONTEXT),
-                "inputFormat": {"supportsImage": image},
+                "inputFormat": {"supportsImage": image, **{k: fmt.get(k, False) for k in INPUT_FLAGS}},
+                **{k: props.get(k, False) for k in FLAGS},
             },
             "optionSpecs": {
                 "reasoningLevel": {"values": ["disabled"], "map": "{}"},
@@ -249,7 +282,7 @@ def manual_no_reasoning_rule(provider_id, model_id, model):
     }
 
 
-def add_manual_rules(rules, provider_id, models):
+def add_manual_rules(rules, provider_id, models, builtin_rules=()):
     """Ручные правила для моделей без reasoning. Существующие правила не трогаем:
     ни ручные (их мог поправить пользователь), ни «умные» — ZCode запрещает оба сразу.
 
@@ -267,7 +300,7 @@ def add_manual_rules(rules, provider_id, models):
         model = models[model_id]
         if not isinstance(model, dict) or model.get("reasoning") or (provider_id, model_id) in taken:
             continue
-        manual.append(manual_no_reasoning_rule(provider_id, model_id, model))
+        manual.append(manual_no_reasoning_rule(provider_id, model_id, model, builtin_rules))
         added.append(model_id)
     return added
 
@@ -312,6 +345,8 @@ def main(argv=None):
     parser.add_argument("--write", action="store_true", help="применить изменения")
     parser.add_argument("--default-context", type=int, default=DEFAULT_CONTEXT)
     parser.add_argument("--default-output", type=int, default=DEFAULT_OUTPUT)
+    parser.add_argument("--zcode-builtin", default=BUILTIN_CATALOG,
+                        help="zcode-builtin.json из приложения ZCode (флаги моделей для ручных правил)")
     args = parser.parse_args(argv)
 
     try:
@@ -388,7 +423,7 @@ def main(argv=None):
 
     manual_added = []
     if rule is not None:
-        manual_added = add_manual_rules(rules, provider_id, merged)
+        manual_added = add_manual_rules(rules, provider_id, merged, load_builtin_rules(args.zcode_builtin))
         for model_id in manual_added:
             print("  + %s: в селекторе reasoning только «выключено» (ручное правило ZCode)" % model_id)
 

@@ -10,6 +10,7 @@ from zcode_litellm_sync import (
     default_config_path,
     add_manual_rules,
     add_provider_rule,
+    builtin_properties,
     find_provider_rule,
     key_models,
     merge_ids,
@@ -195,9 +196,27 @@ def test_manual_rules_for_models_without_reasoning():
     rule = rules["config"]["modelConfigRules"]["manualProviderModelRules"][-1]
     assert rule["config"]["optionSpecs"]["reasoningLevel"] == {"values": ["disabled"], "map": "{}"}
     assert rule["config"]["optionSpecs"]["maxOutputTokens"] == {"max": 393216}
-    assert rule["config"]["properties"] == {"contextWindow": 1000000, "inputFormat": {"supportsImage": False}}
+    # каталога нет — все обязательные флаги false (схема ZCode не принимает правило без них)
+    assert rule["config"]["properties"] == {
+        "contextWindow": 1000000,
+        "inputFormat": {"supportsImage": False, "supportsVideo": False, "supportsPdf": False},
+        "supportsJsonSchemaOutput": False, "supportsNativeWebSearch": False, "supportsMidConversationSystem": False,
+    }
     assert rules["config"]["modelConfigRules"]["manualProviderModelRules"][0]["config"] == {"x": 1}
     assert add_manual_rules(rules, "p", models) == []  # повторный запуск ничего не добавляет
+
+
+def test_builtin_properties_follow_zcode_catalog():
+    # срез zcode-builtin.json 3.14.3: регулярка ловит и `-no-reasoning`
+    catalog = [
+        {"modelMatch": ".*qwen3\\.8-(?:max|flash)(?:[.\\-:/\\[].*)?",
+         "config": {"properties": {"inputFormat": {"supportsImage": True, "supportsVideo": True},
+                                   "supportsJsonSchemaOutput": True}}},
+        {"modelMatch": "(broken", "config": {}},
+    ]
+    props, fmt = builtin_properties(catalog, "qwen3.8-max-no-reasoning")
+    assert props == {"supportsJsonSchemaOutput": True} and fmt == {"supportsVideo": True}, (props, fmt)
+    assert builtin_properties(catalog, "deepseek-v4-pro") == ({}, {})
 
 
 if __name__ == "__main__":
